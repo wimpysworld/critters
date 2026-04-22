@@ -1,11 +1,9 @@
 use std::collections::HashMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use zed_extension_api::{self as zed, settings::LspSettings, Result};
 
 const SERVER_BINARY_NAME: &str = "critters-lsp";
-const REPOSITORY: &str = "wimpysworld/critters";
 
 struct CrittersExtension {
     binary_cache: Option<PathBuf>,
@@ -98,91 +96,20 @@ impl CrittersExtension {
     fn install_binary(
         &mut self,
         language_server_id: &zed::LanguageServerId,
-        args: Vec<String>,
-        env: Vec<(String, String)>,
+        _args: Vec<String>,
+        _env: Vec<(String, String)>,
     ) -> Result<ManagedBinary> {
         zed::set_language_server_installation_status(
             language_server_id,
-            &zed::LanguageServerInstallationStatus::CheckingForUpdate,
+            &zed::LanguageServerInstallationStatus::Failed(
+                "Critters does not auto-download unverified GitHub release binaries. Set lsp.critters-lsp.binary.path or put critters-lsp on your PATH.".into(),
+            ),
         );
 
-        let release = zed::latest_github_release(
-            REPOSITORY,
-            zed::GithubReleaseOptions {
-                require_assets: true,
-                pre_release: false,
-            },
+        Err(
+            "Critters does not auto-download unverified GitHub release binaries. Set lsp.critters-lsp.binary.path or put critters-lsp on your PATH."
+                .into(),
         )
-        .map_err(|error| format!("failed to fetch the latest Critters release: {error}"))?;
-
-        let (platform, architecture) = zed::current_platform();
-        let target = match (platform, architecture) {
-            (zed::Os::Linux, zed::Architecture::X8664) => "x86_64-unknown-linux-gnu",
-            (zed::Os::Mac, zed::Architecture::X8664) => "x86_64-apple-darwin",
-            (zed::Os::Mac, zed::Architecture::Aarch64) => "aarch64-apple-darwin",
-            (zed::Os::Windows, zed::Architecture::X8664) => "x86_64-pc-windows-msvc",
-            _ => return Err("no managed Critters build is available for this platform yet".into()),
-        };
-
-        let is_windows = platform == zed::Os::Windows;
-        let extension = if is_windows { "zip" } else { "tar.gz" };
-        let asset_name = format!(
-            "{SERVER_BINARY_NAME}-{}-{target}.{extension}",
-            release.version
-        );
-
-        let asset = release
-            .assets
-            .iter()
-            .find(|asset| asset.name == asset_name)
-            .ok_or_else(|| format!("no Critters release asset matched {asset_name}"))?;
-
-        let version_dir = format!("{SERVER_BINARY_NAME}-{}", release.version);
-        let mut binary_path = PathBuf::from(&version_dir).join(SERVER_BINARY_NAME);
-        if is_windows {
-            binary_path.set_extension("exe");
-        }
-
-        if !binary_path.exists() {
-            zed::set_language_server_installation_status(
-                language_server_id,
-                &zed::LanguageServerInstallationStatus::Downloading,
-            );
-
-            let download_result = (|| -> Result<()> {
-                zed::download_file(
-                    &asset.download_url,
-                    &version_dir,
-                    if is_windows {
-                        zed::DownloadedFileType::Zip
-                    } else {
-                        zed::DownloadedFileType::GzipTar
-                    },
-                )
-                .map_err(|error| format!("failed to download Critters binary: {error}"))?;
-
-                zed::make_file_executable(path_to_string(&binary_path)?).map_err(|error| {
-                    format!("failed to mark Critters binary executable: {error}")
-                })?;
-
-                Ok(())
-            })();
-
-            if let Err(error) = download_result {
-                fs::remove_dir_all(&version_dir).ok();
-                return Err(error);
-            }
-
-            cleanup_old_versions(&version_dir);
-        }
-
-        self.binary_cache = Some(binary_path.clone());
-
-        Ok(ManagedBinary {
-            path: binary_path,
-            args,
-            env,
-        })
     }
 }
 
@@ -221,27 +148,6 @@ impl zed::Extension for CrittersExtension {
     ) -> Result<Option<zed::serde_json::Value>> {
         LspSettings::for_worktree(language_server_id.as_ref(), worktree)
             .map(|settings| settings.settings)
-    }
-}
-
-fn cleanup_old_versions(active_version_dir: &str) {
-    if let Ok(entries) = fs::read_dir(".") {
-        for entry in entries.flatten() {
-            let Ok(file_type) = entry.file_type() else {
-                continue;
-            };
-            if !file_type.is_dir() {
-                continue;
-            }
-
-            let Ok(name) = entry.file_name().into_string() else {
-                continue;
-            };
-
-            if name.starts_with(SERVER_BINARY_NAME) && name != active_version_dir {
-                fs::remove_dir_all(entry.path()).ok();
-            }
-        }
     }
 }
 

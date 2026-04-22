@@ -89,13 +89,12 @@ The extension looks for `critters-lsp` in this order:
 1. `lsp.critters-lsp.binary.path`
 2. `critters-lsp` on the worktree `PATH`
 3. common local development build paths
-4. the latest GitHub release asset from this repository (convenience fallback only)
 
-If you care about strict supply-chain control or reproducibility, prefer
-`lsp.critters-lsp.binary.path` to a locally managed binary that you pin and verify
-outside the extension. The managed fallback tracks the latest matching GitHub
-release asset and does not currently enforce an out-of-band checksum or signature
-verification step.
+Critters no longer auto-downloads and executes the latest GitHub release asset.
+That convenience fallback created an avoidable supply-chain risk because the
+extension could not pin or verify the downloaded binary out of band. If you need
+managed installation, download and verify the release artifact yourself, then
+point `lsp.critters-lsp.binary.path` at the pinned local binary.
 
 - `critters-lsp-v0.1.0-x86_64-unknown-linux-gnu.tar.gz`
 - `critters-lsp-v0.1.0-aarch64-apple-darwin.tar.gz`

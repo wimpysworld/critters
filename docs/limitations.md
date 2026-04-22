@@ -18,11 +18,12 @@ Critters therefore ships with a broad but explicit language list in `extension.t
 
 If Zed gains a first-class wildcard matcher later, Critters should switch to it.
 
-## Managed binaries depend on GitHub releases
+## No built-in managed binary downloads
 
-The extension can download a managed `critters-lsp` binary from GitHub releases, but that only works after tagged release assets exist.
+Critters intentionally does not auto-download and execute the latest GitHub release binary.
+That fallback was removed because it could not pin or verify release artifacts before execution.
 
-During early development, use a local `binary.path` override or put `critters-lsp` on your `PATH`.
+Use a local `binary.path` override or put `critters-lsp` on your `PATH`.
 
 ## No code actions yet
 
