@@ -34,8 +34,12 @@
               with pkgs;
               [
                 actionlint
+                cargo
+                clippy
                 gh
                 just
+                rustc
+                rustfmt
               ]
               ++ (if tailorPkgs ? tailor then [ tailorPkgs.tailor ] else [ ]);
           };

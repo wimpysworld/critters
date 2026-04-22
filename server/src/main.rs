@@ -1,0 +1,252 @@
+mod config;
+mod rules;
+mod scanner;
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use anyhow::Result;
+use tokio::sync::RwLock;
+use tower_lsp::jsonrpc;
+use tower_lsp::lsp_types::{
+    DidChangeConfigurationParams, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
+    DidOpenTextDocumentParams, Hover, HoverContents, HoverParams, InitializeParams,
+    InitializeResult, InitializedParams, MarkupContent, MarkupKind, MessageType, OneOf,
+    ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind, Url,
+    WorkspaceFoldersServerCapabilities, WorkspaceServerCapabilities,
+};
+use tower_lsp::{Client, LanguageServer, LspService, Server};
+
+use crate::config::ServerConfig;
+use crate::rules::effective_rules;
+use crate::scanner::{contains, scan, to_diagnostics, Finding};
+
+#[derive(Clone, Debug)]
+struct DocumentState {
+    language_id: String,
+    text: String,
+    findings: Vec<Finding>,
+}
+
+#[derive(Debug)]
+struct State {
+    initialization_config: ServerConfig,
+    workspace_config: RwLock<ServerConfig>,
+    documents: RwLock<HashMap<Url, DocumentState>>,
+}
+
+impl State {
+    fn new(initialization_config: ServerConfig) -> Self {
+        Self {
+            initialization_config,
+            workspace_config: RwLock::new(ServerConfig::default()),
+            documents: RwLock::new(HashMap::new()),
+        }
+    }
+
+    async fn current_config(&self) -> ServerConfig {
+        let mut config = self.initialization_config.clone();
+        config.merge(self.workspace_config.read().await.clone());
+        config
+    }
+}
+
+#[derive(Debug)]
+struct Backend {
+    client: Client,
+    state: Arc<State>,
+}
+
+#[tower_lsp::async_trait]
+impl LanguageServer for Backend {
+    async fn initialize(&self, params: InitializeParams) -> jsonrpc::Result<InitializeResult> {
+        if let Ok(config) = ServerConfig::from_optional_value(params.initialization_options) {
+            *self.state.workspace_config.write().await = config;
+        }
+
+        Ok(InitializeResult {
+            capabilities: ServerCapabilities {
+                hover_provider: Some(hover_provider()),
+                text_document_sync: Some(TextDocumentSyncCapability::Kind(
+                    TextDocumentSyncKind::FULL,
+                )),
+                workspace: Some(WorkspaceServerCapabilities {
+                    workspace_folders: Some(WorkspaceFoldersServerCapabilities {
+                        supported: Some(true),
+                        change_notifications: Some(OneOf::Left(true)),
+                    }),
+                    ..WorkspaceServerCapabilities::default()
+                }),
+                ..ServerCapabilities::default()
+            },
+            ..InitializeResult::default()
+        })
+    }
+
+    async fn initialized(&self, _: InitializedParams) {
+        self.client
+            .log_message(
+                MessageType::INFO,
+                "Critters is watching for suspicious Unicode characters.",
+            )
+            .await;
+    }
+
+    async fn shutdown(&self) -> jsonrpc::Result<()> {
+        Ok(())
+    }
+
+    async fn did_open(&self, params: DidOpenTextDocumentParams) {
+        let document = params.text_document;
+        {
+            let mut documents = self.state.documents.write().await;
+            documents.insert(
+                document.uri.clone(),
+                DocumentState {
+                    language_id: document.language_id,
+                    text: document.text,
+                    findings: Vec::new(),
+                },
+            );
+        }
+        self.refresh_document(&document.uri).await;
+    }
+
+    async fn did_change(&self, params: DidChangeTextDocumentParams) {
+        let uri = params.text_document.uri;
+        let new_text = params
+            .content_changes
+            .into_iter()
+            .last()
+            .map(|change| change.text);
+
+        if let Some(text) = new_text {
+            if let Some(document) = self.state.documents.write().await.get_mut(&uri) {
+                document.text = text;
+            }
+            self.refresh_document(&uri).await;
+        }
+    }
+
+    async fn did_close(&self, params: DidCloseTextDocumentParams) {
+        let uri = params.text_document.uri;
+        self.state.documents.write().await.remove(&uri);
+        self.client.publish_diagnostics(uri, Vec::new(), None).await;
+    }
+
+    async fn did_change_configuration(&self, params: DidChangeConfigurationParams) {
+        match ServerConfig::from_value(params.settings) {
+            Ok(config) => {
+                *self.state.workspace_config.write().await = config;
+                self.refresh_all_documents().await;
+            }
+            Err(error) => {
+                self.client
+                    .log_message(
+                        MessageType::ERROR,
+                        format!("Critters could not parse configuration: {error}"),
+                    )
+                    .await;
+            }
+        }
+    }
+
+    async fn hover(&self, params: HoverParams) -> jsonrpc::Result<Option<Hover>> {
+        let position = params.text_document_position_params.position;
+        let uri = params.text_document_position_params.text_document.uri;
+
+        let documents = self.state.documents.read().await;
+        let Some(document) = documents.get(&uri) else {
+            return Ok(None);
+        };
+
+        let finding = document
+            .findings
+            .iter()
+            .find(|finding| contains(&finding.range, position));
+
+        Ok(finding.map(|finding| Hover {
+            contents: HoverContents::Markup(MarkupContent {
+                kind: MarkupKind::Markdown,
+                value: finding.hover.clone(),
+            }),
+            range: Some(finding.range),
+        }))
+    }
+}
+
+impl Backend {
+    async fn refresh_all_documents(&self) {
+        let uris = self
+            .state
+            .documents
+            .read()
+            .await
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+
+        for uri in uris {
+            self.refresh_document(&uri).await;
+        }
+    }
+
+    async fn refresh_document(&self, uri: &Url) {
+        let snapshot = {
+            let documents = self.state.documents.read().await;
+            documents.get(uri).cloned()
+        };
+
+        let Some(snapshot) = snapshot else {
+            return;
+        };
+
+        let config = self.state.current_config().await;
+        let findings = match effective_rules(&config, &snapshot.language_id)
+            .map(|rules| scan(&snapshot.text, &rules, config.max_diagnostics_per_document))
+        {
+            Ok(findings) => findings,
+            Err(error) => {
+                self.client
+                    .log_message(
+                        MessageType::ERROR,
+                        format!(
+                            "Critters failed to build rules for {}: {error}",
+                            snapshot.language_id
+                        ),
+                    )
+                    .await;
+                return;
+            }
+        };
+
+        let diagnostics = to_diagnostics(&findings);
+        {
+            let mut documents = self.state.documents.write().await;
+            if let Some(document) = documents.get_mut(uri) {
+                document.findings = findings.clone();
+            }
+        }
+        self.client
+            .publish_diagnostics(uri.clone(), diagnostics, None)
+            .await;
+    }
+}
+
+fn hover_provider() -> tower_lsp::lsp_types::HoverProviderCapability {
+    tower_lsp::lsp_types::HoverProviderCapability::Simple(true)
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let stdin = tokio::io::stdin();
+    let stdout = tokio::io::stdout();
+
+    let (service, socket) = LspService::new(|client| Backend {
+        client,
+        state: Arc::new(State::new(ServerConfig::default())),
+    });
+
+    Server::new(stdin, stdout, socket).serve(service).await;
+    Ok(())
+}

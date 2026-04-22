@@ -1,0 +1,19 @@
+[package]
+name = "critters-lsp"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "BlueOak-1.0.0"
+repository = "https://github.com/wimpysworld/critters"
+description = "Language server for Critters, a gremlins-style Unicode checker for Zed"
+
+[[bin]]
+name = "critters-lsp"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tower-lsp.workspace = true
