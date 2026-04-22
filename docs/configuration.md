@@ -47,6 +47,9 @@ Field meanings:
 
 `severity: "none"` removes a built-in rule or a broader custom rule for that code point.
 
+When custom rules overlap, Critters applies broader ranges first and narrower rules last, so the most specific rule wins.
+Inclusive ranges that would expand to more than `4096` code points are rejected.
+
 ### `language_overrides`
 
 Overrides rules for a specific LSP `languageId`.

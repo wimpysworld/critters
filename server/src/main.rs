@@ -24,8 +24,19 @@ use crate::scanner::{contains, scan, to_diagnostics, Finding};
 #[derive(Clone, Debug)]
 struct DocumentState {
     language_id: String,
+    version: i32,
     text: String,
     findings: Vec<Finding>,
+    refresh_generation: u64,
+}
+
+#[derive(Clone, Debug)]
+struct DocumentSnapshot {
+    uri: Url,
+    language_id: String,
+    version: i32,
+    text: String,
+    refresh_generation: u64,
 }
 
 #[derive(Debug)]
@@ -48,6 +59,59 @@ impl State {
         let mut config = self.initialization_config.clone();
         config.merge(self.workspace_config.read().await.clone());
         config
+    }
+
+    async fn begin_refresh(&self, uri: &Url) -> Option<DocumentSnapshot> {
+        let mut documents = self.documents.write().await;
+        let document = documents.get_mut(uri)?;
+        document.refresh_generation = document.refresh_generation.saturating_add(1);
+
+        Some(DocumentSnapshot {
+            uri: uri.clone(),
+            language_id: document.language_id.clone(),
+            version: document.version,
+            text: document.text.clone(),
+            refresh_generation: document.refresh_generation,
+        })
+    }
+
+    async fn store_findings_if_current(
+        &self,
+        uri: &Url,
+        snapshot: &DocumentSnapshot,
+        findings: Vec<Finding>,
+    ) -> bool {
+        let mut documents = self.documents.write().await;
+        let Some(document) = documents.get_mut(uri) else {
+            return false;
+        };
+
+        if !document.matches(snapshot) {
+            return false;
+        }
+
+        document.findings = findings;
+        true
+    }
+
+    async fn clear_findings_if_current(&self, uri: &Url, snapshot: &DocumentSnapshot) -> bool {
+        let mut documents = self.documents.write().await;
+        let Some(document) = documents.get_mut(uri) else {
+            return false;
+        };
+
+        if !document.matches(snapshot) {
+            return false;
+        }
+
+        document.findings.clear();
+        true
+    }
+}
+
+impl DocumentState {
+    fn matches(&self, snapshot: &DocumentSnapshot) -> bool {
+        self.version == snapshot.version && self.refresh_generation == snapshot.refresh_generation
     }
 }
 
@@ -103,9 +167,11 @@ impl LanguageServer for Backend {
             documents.insert(
                 document.uri.clone(),
                 DocumentState {
-                    language_id: document.language_id,
-                    text: document.text,
+                    language_id: document.language_id.clone(),
+                    version: document.version,
+                    text: document.text.clone(),
                     findings: Vec::new(),
+                    refresh_generation: 0,
                 },
             );
         }
@@ -114,6 +180,7 @@ impl LanguageServer for Backend {
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
         let uri = params.text_document.uri;
+        let version = params.text_document.version;
         let new_text = params
             .content_changes
             .into_iter()
@@ -123,6 +190,7 @@ impl LanguageServer for Backend {
         if let Some(text) = new_text {
             if let Some(document) = self.state.documents.write().await.get_mut(&uri) {
                 document.text = text;
+                document.version = version;
             }
             self.refresh_document(&uri).await;
         }
@@ -130,8 +198,16 @@ impl LanguageServer for Backend {
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = params.text_document.uri;
-        self.state.documents.write().await.remove(&uri);
-        self.client.publish_diagnostics(uri, Vec::new(), None).await;
+        let version = self
+            .state
+            .documents
+            .write()
+            .await
+            .remove(&uri)
+            .map(|document| document.version);
+        self.client
+            .publish_diagnostics(uri, Vec::new(), version)
+            .await;
     }
 
     async fn did_change_configuration(&self, params: DidChangeConfigurationParams) {
@@ -192,12 +268,7 @@ impl Backend {
     }
 
     async fn refresh_document(&self, uri: &Url) {
-        let snapshot = {
-            let documents = self.state.documents.read().await;
-            documents.get(uri).cloned()
-        };
-
-        let Some(snapshot) = snapshot else {
+        let Some(snapshot) = self.state.begin_refresh(uri).await else {
             return;
         };
 
@@ -216,20 +287,30 @@ impl Backend {
                         ),
                     )
                     .await;
+
+                if self.state.clear_findings_if_current(uri, &snapshot).await {
+                    self.client
+                        .publish_diagnostics(
+                            snapshot.uri.clone(),
+                            Vec::new(),
+                            Some(snapshot.version),
+                        )
+                        .await;
+                }
                 return;
             }
         };
 
         let diagnostics = to_diagnostics(&findings);
+        if self
+            .state
+            .store_findings_if_current(uri, &snapshot, findings)
+            .await
         {
-            let mut documents = self.state.documents.write().await;
-            if let Some(document) = documents.get_mut(uri) {
-                document.findings = findings.clone();
-            }
+            self.client
+                .publish_diagnostics(snapshot.uri.clone(), diagnostics, Some(snapshot.version))
+                .await;
         }
-        self.client
-            .publish_diagnostics(uri.clone(), diagnostics, None)
-            .await;
     }
 }
 
@@ -249,4 +330,101 @@ async fn main() -> Result<()> {
 
     Server::new(stdin, stdout, socket).serve(service).await;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DocumentState, State};
+    use crate::config::Severity;
+    use crate::scanner::Finding;
+    use tower_lsp::lsp_types::{Position, Range, Url};
+
+    fn sample_finding(message: &str) -> Finding {
+        Finding {
+            range: Range {
+                start: Position::new(0, 0),
+                end: Position::new(0, 1),
+            },
+            severity: Severity::Warning,
+            message: message.to_string(),
+            hover: message.to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn stale_refresh_results_are_discarded() {
+        let state = State::new(Default::default());
+        let uri = Url::parse("file:///tmp/critters.rs").expect("valid file uri");
+
+        state.documents.write().await.insert(
+            uri.clone(),
+            DocumentState {
+                language_id: "rust".to_string(),
+                version: 1,
+                text: "old".to_string(),
+                findings: vec![sample_finding("old")],
+                refresh_generation: 0,
+            },
+        );
+
+        let older_snapshot = state
+            .begin_refresh(&uri)
+            .await
+            .expect("older snapshot to exist");
+
+        {
+            let mut documents = state.documents.write().await;
+            let document = documents.get_mut(&uri).expect("document to exist");
+            document.text = "new".to_string();
+            document.version = 2;
+        }
+
+        let newer_snapshot = state
+            .begin_refresh(&uri)
+            .await
+            .expect("newer snapshot to exist");
+
+        assert!(
+            !state
+                .store_findings_if_current(&uri, &older_snapshot, vec![sample_finding("stale")])
+                .await
+        );
+        assert!(
+            state
+                .store_findings_if_current(&uri, &newer_snapshot, vec![sample_finding("fresh")])
+                .await
+        );
+
+        let documents = state.documents.read().await;
+        let findings = &documents.get(&uri).expect("document to exist").findings;
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].message, "fresh");
+    }
+
+    #[tokio::test]
+    async fn current_refresh_failures_clear_cached_findings() {
+        let state = State::new(Default::default());
+        let uri = Url::parse("file:///tmp/critters.rs").expect("valid file uri");
+
+        state.documents.write().await.insert(
+            uri.clone(),
+            DocumentState {
+                language_id: "rust".to_string(),
+                version: 1,
+                text: "text".to_string(),
+                findings: vec![sample_finding("stale")],
+                refresh_generation: 0,
+            },
+        );
+
+        let snapshot = state.begin_refresh(&uri).await.expect("snapshot to exist");
+        assert!(state.clear_findings_if_current(&uri, &snapshot).await);
+
+        let documents = state.documents.read().await;
+        assert!(documents
+            .get(&uri)
+            .expect("document to exist")
+            .findings
+            .is_empty());
+    }
 }

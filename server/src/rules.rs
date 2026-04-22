@@ -22,6 +22,27 @@ struct BuiltinRuleSpec {
     zero_width: bool,
 }
 
+#[derive(Clone, Debug)]
+struct ParsedRuleKey {
+    start: u32,
+    end: u32,
+}
+
+impl ParsedRuleKey {
+    fn span_len(&self) -> u32 {
+        self.end - self.start + 1
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ParsedRuleEntry<'a> {
+    key: &'a str,
+    config: &'a RuleConfig,
+    range: ParsedRuleKey,
+}
+
+const MAX_RULE_SPAN: u32 = 4096;
+
 const BUILTIN_RULES: &[BuiltinRuleSpec] = &[
     BuiltinRuleSpec {
         key: "0003",
@@ -210,7 +231,8 @@ fn builtin_rules() -> Result<BTreeMap<u32, EffectiveRule>> {
             class_name: Some(spec.class_name.to_string()),
             zero_width: Some(spec.zero_width),
         };
-        apply_single_rule(&mut resolved, spec.key, &config)?;
+        let range = parse_rule_key(spec.key)?;
+        apply_single_rule(&mut resolved, &config, &range);
     }
 
     Ok(resolved)
@@ -220,8 +242,29 @@ fn apply_rule_set(
     target: &mut BTreeMap<u32, EffectiveRule>,
     rules: &BTreeMap<String, RuleConfig>,
 ) -> Result<()> {
-    for (key, config) in rules {
-        apply_single_rule(target, key, config)?;
+    let mut entries = rules
+        .iter()
+        .map(|(key, config)| {
+            Ok(ParsedRuleEntry {
+                key,
+                config,
+                range: parse_rule_key(key)?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    entries.sort_by(|left, right| {
+        right
+            .range
+            .span_len()
+            .cmp(&left.range.span_len())
+            .then(left.range.start.cmp(&right.range.start))
+            .then(left.range.end.cmp(&right.range.end))
+            .then(left.key.cmp(right.key))
+    });
+
+    for entry in entries {
+        apply_single_rule(target, entry.config, &entry.range)?;
     }
 
     Ok(())
@@ -229,12 +272,10 @@ fn apply_rule_set(
 
 fn apply_single_rule(
     target: &mut BTreeMap<u32, EffectiveRule>,
-    key: &str,
     config: &RuleConfig,
+    range: &ParsedRuleKey,
 ) -> Result<()> {
-    let (start, end) = parse_rule_key(key)?;
-
-    for code_point in start..=end {
+    for code_point in range.start..=range.end {
         if let Some(Severity::None) = config.severity {
             target.remove(&code_point);
             continue;
@@ -272,11 +313,9 @@ fn apply_single_rule(
             },
         );
     }
-
-    Ok(())
 }
 
-fn parse_rule_key(key: &str) -> Result<(u32, u32)> {
+fn parse_rule_key(key: &str) -> Result<ParsedRuleKey> {
     let cleaned = key.trim().to_ascii_uppercase();
     let mut parts = cleaned.split('-');
     let start = parse_scalar(
@@ -297,7 +336,12 @@ fn parse_rule_key(key: &str) -> Result<(u32, u32)> {
         bail!("invalid rule key {key}: range start was after range end");
     }
 
-    Ok((start, end))
+    let span_len = end - start + 1;
+    if span_len > MAX_RULE_SPAN {
+        bail!("invalid rule key {key}: expanded to more than {MAX_RULE_SPAN} code points");
+    }
+
+    Ok(ParsedRuleKey { start, end })
 }
 
 fn parse_scalar(value: &str) -> Result<u32> {
@@ -362,5 +406,59 @@ mod tests {
 
         assert!(!markdown_rules.contains_key(&0x00A0));
         assert!(rust_rules.contains_key(&0x00A0));
+    }
+
+    #[test]
+    fn more_specific_custom_rules_override_broader_ranges() {
+        let mut config = ServerConfig::default();
+        config.rules.insert(
+            "00A0-00FF".to_string(),
+            RuleConfig {
+                description: Some("LATIN-1 SUPPLEMENT".to_string()),
+                severity: Some(Severity::Warning),
+                class_name: Some("latin-1".to_string()),
+                zero_width: Some(false),
+            },
+        );
+        config.rules.insert(
+            "00A0".to_string(),
+            RuleConfig {
+                description: None,
+                severity: Some(Severity::None),
+                class_name: None,
+                zero_width: None,
+            },
+        );
+
+        let rules = effective_rules(&config, "plaintext").expect("rules to build");
+
+        assert!(!rules.contains_key(&0x00A0));
+        assert_eq!(
+            rules
+                .get(&0x00A1)
+                .expect("U+00A1 to remain covered")
+                .description,
+            "LATIN-1 SUPPLEMENT"
+        );
+    }
+
+    #[test]
+    fn oversized_rule_ranges_are_rejected() {
+        let mut config = ServerConfig::default();
+        config.rules.insert(
+            "0000-10FFFF".to_string(),
+            RuleConfig {
+                description: Some("All of Unicode".to_string()),
+                severity: Some(Severity::Warning),
+                class_name: Some("everything".to_string()),
+                zero_width: Some(false),
+            },
+        );
+
+        let error = effective_rules(&config, "plaintext").expect_err("range to be rejected");
+        assert!(
+            error.to_string().contains("expanded to more than"),
+            "unexpected error: {error}"
+        );
     }
 }
