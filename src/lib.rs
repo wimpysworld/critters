@@ -5,9 +5,7 @@ use zed_extension_api::{self as zed, settings::LspSettings, Result};
 
 const SERVER_BINARY_NAME: &str = "critters-lsp";
 
-struct CrittersExtension {
-    binary_cache: Option<PathBuf>,
-}
+struct CrittersExtension;
 
 #[derive(Clone, Debug)]
 struct ManagedBinary {
@@ -33,22 +31,18 @@ impl CrittersExtension {
             .unwrap_or_default();
 
         if let Some(path) = binary_settings.and_then(|value| value.path.clone()) {
-            let mut env = worktree.shell_env();
-            extend_env(&mut env, configured_env);
             return Ok(ManagedBinary {
                 path: PathBuf::from(path),
                 args: configured_args,
-                env,
+                env: merged_env(worktree, configured_env),
             });
         }
 
         if let Some(path) = worktree.which(SERVER_BINARY_NAME) {
-            let mut env = worktree.shell_env();
-            extend_env(&mut env, configured_env);
             return Ok(ManagedBinary {
                 path: PathBuf::from(path),
                 args: configured_args,
-                env,
+                env: merged_env(worktree, configured_env),
             });
         }
 
@@ -56,21 +50,11 @@ impl CrittersExtension {
             return Ok(ManagedBinary {
                 path,
                 args: configured_args,
-                env: configured_env,
+                env: merged_env(worktree, configured_env),
             });
         }
 
-        if let Some(path) = &self.binary_cache {
-            if path.exists() {
-                return Ok(ManagedBinary {
-                    path: path.clone(),
-                    args: configured_args,
-                    env: configured_env,
-                });
-            }
-        }
-
-        self.install_binary(language_server_id, configured_args, configured_env)
+        self.install_binary(language_server_id)
     }
 
     fn find_dev_binary(&self) -> Option<PathBuf> {
@@ -96,8 +80,6 @@ impl CrittersExtension {
     fn install_binary(
         &mut self,
         language_server_id: &zed::LanguageServerId,
-        _args: Vec<String>,
-        _env: Vec<(String, String)>,
     ) -> Result<ManagedBinary> {
         zed::set_language_server_installation_status(
             language_server_id,
@@ -115,7 +97,7 @@ impl CrittersExtension {
 
 impl zed::Extension for CrittersExtension {
     fn new() -> Self {
-        Self { binary_cache: None }
+        Self
     }
 
     fn language_server_command(
@@ -149,6 +131,15 @@ impl zed::Extension for CrittersExtension {
         LspSettings::for_worktree(language_server_id.as_ref(), worktree)
             .map(|settings| settings.settings)
     }
+}
+
+fn merged_env(
+    worktree: &zed::Worktree,
+    configured_env: Vec<(String, String)>,
+) -> Vec<(String, String)> {
+    let mut env = worktree.shell_env();
+    extend_env(&mut env, configured_env);
+    env
 }
 
 fn extend_env(target: &mut Vec<(String, String)>, source: Vec<(String, String)>) {
