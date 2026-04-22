@@ -232,7 +232,7 @@ fn builtin_rules() -> Result<BTreeMap<u32, EffectiveRule>> {
             zero_width: Some(spec.zero_width),
         };
         let range = parse_rule_key(spec.key)?;
-        apply_single_rule(&mut resolved, &config, &range);
+        apply_single_rule(&mut resolved, &config, &range)?;
     }
 
     Ok(resolved)
@@ -313,6 +313,8 @@ fn apply_single_rule(
             },
         );
     }
+
+    Ok(())
 }
 
 fn parse_rule_key(key: &str) -> Result<ParsedRuleKey> {
