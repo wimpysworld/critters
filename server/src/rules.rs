@@ -276,6 +276,10 @@ fn apply_single_rule(
     range: &ParsedRuleKey,
 ) -> Result<()> {
     for code_point in range.start..=range.end {
+        if char::from_u32(code_point).is_none() {
+            continue;
+        }
+
         if let Some(Severity::None) = config.severity {
             target.remove(&code_point);
             continue;
@@ -462,5 +466,26 @@ mod tests {
             error.to_string().contains("expanded to more than"),
             "unexpected error: {error}"
         );
+    }
+
+    #[test]
+    fn surrogate_code_points_inside_a_range_are_skipped() {
+        let mut config = ServerConfig::default();
+        config.rules.insert(
+            "D7FF-E001".to_string(),
+            RuleConfig {
+                description: Some("edge range".to_string()),
+                severity: Some(Severity::Warning),
+                class_name: Some("unicode".to_string()),
+                zero_width: Some(false),
+            },
+        );
+
+        let rules = effective_rules(&config, "plaintext").expect("rules to build");
+        assert!(rules.contains_key(&0xD7FF));
+        assert!(!rules.contains_key(&0xD800));
+        assert!(!rules.contains_key(&0xDFFF));
+        assert!(rules.contains_key(&0xE000));
+        assert!(rules.contains_key(&0xE001));
     }
 }

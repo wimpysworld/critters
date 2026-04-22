@@ -89,9 +89,13 @@ The extension looks for `critters-lsp` in this order:
 1. `lsp.critters-lsp.binary.path`
 2. `critters-lsp` on the worktree `PATH`
 3. common local development build paths
-4. the latest GitHub release asset from this repository
+4. the latest GitHub release asset from this repository (convenience fallback only)
 
-Managed release assets are expected to be named like:
+If you care about strict supply-chain control or reproducibility, prefer
+`lsp.critters-lsp.binary.path` to a locally managed binary that you pin and verify
+outside the extension. The managed fallback tracks the latest matching GitHub
+release asset and does not currently enforce an out-of-band checksum or signature
+verification step.
 
 - `critters-lsp-v0.1.0-x86_64-unknown-linux-gnu.tar.gz`
 - `critters-lsp-v0.1.0-aarch64-apple-darwin.tar.gz`

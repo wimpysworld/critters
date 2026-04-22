@@ -17,7 +17,7 @@ use tower_lsp::lsp_types::{
 };
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
-use crate::config::ServerConfig;
+use crate::config::{ServerConfig, ServerConfigUpdate};
 use crate::rules::effective_rules;
 use crate::scanner::{contains, scan, to_diagnostics, Finding};
 
@@ -128,9 +128,9 @@ struct Backend {
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> jsonrpc::Result<InitializeResult> {
-        if let Ok(config) = ServerConfig::from_optional_value(params.initialization_options) {
-            self.state.set_initialization_config(config).await;
-        }
+        let config = ServerConfig::from_optional_value(params.initialization_options)
+            .map_err(|error| jsonrpc::Error::invalid_params(error.to_string()))?;
+        self.state.set_initialization_config(config).await;
 
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
@@ -215,9 +215,17 @@ impl LanguageServer for Backend {
     }
 
     async fn did_change_configuration(&self, params: DidChangeConfigurationParams) {
-        match ServerConfig::from_value(params.settings) {
-            Ok(config) => {
-                *self.state.workspace_config.write().await = config;
+        match ServerConfigUpdate::from_value(params.settings) {
+            Ok(Some(update)) => {
+                self.state
+                    .workspace_config
+                    .write()
+                    .await
+                    .apply_update(update);
+                self.refresh_all_documents().await;
+            }
+            Ok(None) => {
+                *self.state.workspace_config.write().await = ServerConfig::default();
                 self.refresh_all_documents().await;
             }
             Err(error) => {
