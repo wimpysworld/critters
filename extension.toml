@@ -1,0 +1,47 @@
+id = "critters"
+name = "Critters"
+version = "0.1.0"
+schema_version = 1
+authors = ["Traya <traya@darth.cc>"]
+description = "Gremlins-style Unicode safety checks for Zed via diagnostics and hover."
+repository = "https://github.com/wimpysworld/critters"
+
+[language_servers.critters-lsp]
+name = "Critters LSP"
+languages = [
+  "AsciiDoc",
+  "C",
+  "C++",
+  "CMake",
+  "Clojure",
+  "CSharp",
+  "Dart",
+  "Git Commit",
+  "Go",
+  "Groovy",
+  "Haskell",
+  "HTML",
+  "Java",
+  "JavaScript",
+  "Kotlin",
+  "LaTeX",
+  "Literate Haskell",
+  "Lua",
+  "Luau",
+  "Markdown",
+  "Nix",
+  "Org",
+  "PHP",
+  "PowerShell",
+  "Python",
+  "Ruby",
+  "Rust",
+  "Scala",
+  "Shell Script",
+  "Solidity",
+  "Swift",
+  "TOML",
+  "TypeScript",
+  "Typst",
+  "Zig",
+]
