@@ -41,7 +41,7 @@ struct DocumentSnapshot {
 
 #[derive(Debug)]
 struct State {
-    initialization_config: ServerConfig,
+    initialization_config: RwLock<ServerConfig>,
     workspace_config: RwLock<ServerConfig>,
     documents: RwLock<HashMap<Url, DocumentState>>,
 }
@@ -49,14 +49,18 @@ struct State {
 impl State {
     fn new(initialization_config: ServerConfig) -> Self {
         Self {
-            initialization_config,
+            initialization_config: RwLock::new(initialization_config),
             workspace_config: RwLock::new(ServerConfig::default()),
             documents: RwLock::new(HashMap::new()),
         }
     }
 
+    async fn set_initialization_config(&self, config: ServerConfig) {
+        *self.initialization_config.write().await = config;
+    }
+
     async fn current_config(&self) -> ServerConfig {
-        let mut config = self.initialization_config.clone();
+        let mut config = self.initialization_config.read().await.clone();
         config.merge(self.workspace_config.read().await.clone());
         config
     }
@@ -125,7 +129,7 @@ struct Backend {
 impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> jsonrpc::Result<InitializeResult> {
         if let Ok(config) = ServerConfig::from_optional_value(params.initialization_options) {
-            *self.state.workspace_config.write().await = config;
+            self.state.set_initialization_config(config).await;
         }
 
         Ok(InitializeResult {
@@ -334,8 +338,10 @@ async fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::{DocumentState, State};
-    use crate::config::Severity;
+    use crate::config::{RuleConfig, ServerConfig, Severity};
     use crate::scanner::Finding;
     use tower_lsp::lsp_types::{Position, Range, Url};
 
@@ -349,6 +355,36 @@ mod tests {
             message: message.to_string(),
             hover: message.to_string(),
         }
+    }
+
+    #[tokio::test]
+    async fn initialization_configuration_survives_workspace_updates() {
+        let mut init_rules = BTreeMap::new();
+        init_rules.insert(
+            "00A0".to_string(),
+            RuleConfig {
+                severity: Some(Severity::Warning),
+                ..RuleConfig::default()
+            },
+        );
+
+        let state = State::new(ServerConfig::default());
+        state
+            .set_initialization_config(ServerConfig {
+                max_diagnostics_per_document: 500,
+                rules: init_rules,
+                language_overrides: BTreeMap::new(),
+            })
+            .await;
+
+        *state.workspace_config.write().await = ServerConfig {
+            max_diagnostics_per_document: 25,
+            ..ServerConfig::default()
+        };
+
+        let merged = state.current_config().await;
+        assert_eq!(merged.max_diagnostics_per_document, 25);
+        assert!(merged.rules.contains_key("00A0"));
     }
 
     #[tokio::test]

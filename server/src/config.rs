@@ -76,7 +76,7 @@ impl ServerConfig {
     }
 
     pub fn from_value(value: Value) -> Result<Self> {
-        let value = unwrap_nested(value);
+        let value = normalize_config_value(unwrap_nested(value));
         serde_json::from_value(value).context("failed to parse Critters configuration")
     }
 
@@ -104,5 +104,35 @@ fn unwrap_nested(value: Value) -> Value {
             }
         }
         other => other,
+    }
+}
+
+fn normalize_config_value(value: Value) -> Value {
+    match value {
+        Value::Null => Value::Object(Default::default()),
+        other => other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::ServerConfig;
+
+    #[test]
+    fn top_level_null_configuration_resets_to_defaults() {
+        let config = ServerConfig::from_value(serde_json::Value::Null)
+            .expect("null configuration to parse as defaults");
+
+        assert_eq!(config, ServerConfig::default());
+    }
+
+    #[test]
+    fn nested_null_configuration_resets_to_defaults() {
+        let config = ServerConfig::from_value(json!({ "critters-lsp": null }))
+            .expect("nested null configuration to parse as defaults");
+
+        assert_eq!(config, ServerConfig::default());
     }
 }
