@@ -59,18 +59,18 @@ impl CrittersExtension {
 
     fn find_dev_binary(&self) -> Option<PathBuf> {
         let mut candidates = vec![
-            PathBuf::from("server/target/debug/critters-lsp"),
-            PathBuf::from("server/target/release/critters-lsp"),
             PathBuf::from("target/debug/critters-lsp"),
             PathBuf::from("target/release/critters-lsp"),
+            PathBuf::from("../../target/debug/critters-lsp"),
+            PathBuf::from("../../target/release/critters-lsp"),
         ];
 
         if cfg!(target_os = "windows") {
             candidates.extend([
-                PathBuf::from("server/target/debug/critters-lsp.exe"),
-                PathBuf::from("server/target/release/critters-lsp.exe"),
                 PathBuf::from("target/debug/critters-lsp.exe"),
                 PathBuf::from("target/release/critters-lsp.exe"),
+                PathBuf::from("../../target/debug/critters-lsp.exe"),
+                PathBuf::from("../../target/release/critters-lsp.exe"),
             ]);
         }
 

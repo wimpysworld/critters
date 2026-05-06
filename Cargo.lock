@@ -82,18 +82,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "critters-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "lsp-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "critters-lsp"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "serde",
- "serde_json",
+ "critters-core",
  "tokio",
  "tower-lsp",
 ]
 
 [[package]]
-name = "critters_zed"
+name = "critters-zed"
 version = "0.1.0"
 dependencies = [
  "zed_extension_api",

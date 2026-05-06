@@ -1,0 +1,14 @@
+[package]
+name = "critters-core"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "BlueOak-1.0.0"
+repository = "https://github.com/wimpysworld/critters"
+description = "Core configuration, rules, and scanning logic for Critters"
+
+[dependencies]
+anyhow.workspace = true
+lsp-types.workspace = true
+serde.workspace = true
+serde_json.workspace = true

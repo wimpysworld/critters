@@ -46,7 +46,7 @@ jobs:
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
 
       - name: Build release binary
-        run: cargo build --locked --release --manifest-path server/Cargo.toml --target ${{ matrix.target }}
+        run: cargo build --locked --release --package critters-lsp --target ${{ matrix.target }}
 
       - name: Package Unix artefact
         if: runner.os != 'Windows'

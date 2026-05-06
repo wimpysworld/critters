@@ -12,7 +12,7 @@ It scans open files for invisible, misleading, and high-risk Unicode characters,
 - language-specific overrides keyed by LSP `languageId`
 - one diagnostic per contiguous suspicious run
 - hover details with code points, classes, and severity
-- Zed extension wrapper that launches a configured or locally installed `critters-lsp` binary
+- Zed extension wrapper in `editors/zed` that launches a configured or locally installed `critters-lsp` binary
 - quick fixes that remove invisible controls or replace safe cases such as no-break spaces and curly quotes with ASCII
 
 ## What it does not promise yet
@@ -57,16 +57,22 @@ Add settings under `lsp.critters-lsp.settings` in `~/.config/zed/settings.json`.
 }
 ```
 
+## Repository layout
+
+- `crates/critters-core` contains reusable configuration, rules, and scanner logic.
+- `crates/critters-lsp` contains the standalone language server binary.
+- `editors/zed` contains the thin Zed extension wrapper.
+
 ## Local development
 
 1. Enter the dev shell.
 2. Build the server.
-3. Install the repo as a dev extension in Zed.
+3. Install `editors/zed` as the dev extension in Zed.
 4. Point Zed at the locally built binary, or put `critters-lsp` on your `PATH`.
 
 ```bash
 nix develop
-cargo build --manifest-path server/Cargo.toml
+cargo build --package critters-lsp
 ```
 
 Example local binary override:
@@ -76,7 +82,7 @@ Example local binary override:
   "lsp": {
     "critters-lsp": {
       "binary": {
-        "path": "/absolute/path/to/critters/server/target/debug/critters-lsp"
+        "path": "/absolute/path/to/critters/target/debug/critters-lsp"
       }
     }
   }
