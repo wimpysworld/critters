@@ -11,11 +11,12 @@ use tower_lsp::jsonrpc;
 use tower_lsp::lsp_types::{
     CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionParams,
     CodeActionProviderCapability, CodeActionResponse, DidChangeConfigurationParams,
-    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams, Hover,
-    HoverContents, HoverParams, InitializeParams, InitializeResult, InitializedParams,
-    MarkupContent, MarkupKind, MessageType, OneOf, ServerCapabilities, TextDocumentSyncCapability,
-    TextDocumentSyncKind, TextEdit, Url, WorkspaceEdit, WorkspaceFoldersServerCapabilities,
-    WorkspaceServerCapabilities,
+    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
+    DocumentChanges, Hover, HoverContents, HoverParams, InitializeParams, InitializeResult,
+    InitializedParams, MarkupContent, MarkupKind, MessageType,
+    OptionalVersionedTextDocumentIdentifier, OneOf, ServerCapabilities, TextDocumentEdit,
+    TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, Url, WorkspaceEdit,
+    WorkspaceFoldersServerCapabilities, WorkspaceServerCapabilities,
 };
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
@@ -113,6 +114,18 @@ impl State {
         document.findings.clear();
         true
     }
+
+    async fn update_document(&self, uri: &Url, version: i32, text: String) -> bool {
+        let mut documents = self.documents.write().await;
+        let Some(document) = documents.get_mut(uri) else {
+            return false;
+        };
+
+        document.text = text;
+        document.version = version;
+        document.findings.clear();
+        true
+    }
 }
 
 impl DocumentState {
@@ -195,10 +208,7 @@ impl LanguageServer for Backend {
             .map(|change| change.text);
 
         if let Some(text) = new_text {
-            if let Some(document) = self.state.documents.write().await.get_mut(&uri) {
-                document.text = text;
-                document.version = version;
-            }
+            self.state.update_document(&uri, version, text).await;
             self.refresh_document(&uri).await;
         }
     }
@@ -279,24 +289,7 @@ impl LanguageServer for Backend {
             .findings
             .iter()
             .filter(|finding| ranges_overlap(finding.range, params.range))
-            .map(|finding| {
-                CodeActionOrCommand::CodeAction(CodeAction {
-                    title: finding.fix_title.clone(),
-                    kind: Some(CodeActionKind::QUICKFIX),
-                    edit: Some(WorkspaceEdit {
-                        changes: Some(HashMap::from([(
-                            uri.clone(),
-                            vec![TextEdit {
-                                range: finding.range,
-                                new_text: finding.replacement.clone(),
-                            }],
-                        )])),
-                        ..WorkspaceEdit::default()
-                    }),
-                    is_preferred: Some(true),
-                    ..CodeAction::default()
-                })
-            })
+            .map(|finding| quick_fix_action(&uri, document.version, finding))
             .collect::<Vec<_>>();
 
         if actions.is_empty() {
@@ -394,6 +387,28 @@ fn compare_position(
     }
 }
 
+fn quick_fix_action(uri: &Url, version: i32, finding: &Finding) -> CodeActionOrCommand {
+    CodeActionOrCommand::CodeAction(CodeAction {
+        title: finding.fix_title.clone(),
+        kind: Some(CodeActionKind::QUICKFIX),
+        edit: Some(WorkspaceEdit {
+            document_changes: Some(DocumentChanges::Edits(vec![TextDocumentEdit {
+                text_document: OptionalVersionedTextDocumentIdentifier {
+                    uri: uri.clone(),
+                    version: Some(version),
+                },
+                edits: vec![OneOf::Left(TextEdit {
+                    range: finding.range,
+                    new_text: finding.replacement.clone(),
+                })],
+            }])),
+            ..WorkspaceEdit::default()
+        }),
+        is_preferred: Some(true),
+        ..CodeAction::default()
+    })
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let stdin = tokio::io::stdin();
@@ -412,10 +427,12 @@ async fn main() -> Result<()> {
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::{DocumentState, State};
+    use super::{quick_fix_action, DocumentState, State};
     use crate::config::{RuleConfig, ServerConfig, Severity};
     use crate::scanner::Finding;
-    use tower_lsp::lsp_types::{Position, Range, Url};
+    use tower_lsp::lsp_types::{
+        CodeActionOrCommand, DocumentChanges, Position, Range, TextEdit, Url,
+    };
 
     fn sample_finding(message: &str) -> Finding {
         Finding {
@@ -536,5 +553,61 @@ mod tests {
             .expect("document to exist")
             .findings
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn document_updates_clear_cached_findings() {
+        let state = State::new(Default::default());
+        let uri = Url::parse("file:///tmp/critters.rs").expect("valid file uri");
+
+        state.documents.write().await.insert(
+            uri.clone(),
+            DocumentState {
+                language_id: "rust".to_string(),
+                version: 1,
+                text: "old".to_string(),
+                findings: vec![sample_finding("stale")],
+                refresh_generation: 0,
+            },
+        );
+
+        assert!(state.update_document(&uri, 2, "new".to_string()).await);
+
+        let documents = state.documents.read().await;
+        let document = documents.get(&uri).expect("document to exist");
+        assert_eq!(document.version, 2);
+        assert_eq!(document.text, "new");
+        assert!(document.findings.is_empty());
+    }
+
+    #[test]
+    fn quick_fix_actions_are_versioned() {
+        let uri = Url::parse("file:///tmp/critters.rs").expect("valid file uri");
+        let finding = sample_finding("stale");
+
+        let action = quick_fix_action(&uri, 7, &finding);
+        let CodeActionOrCommand::CodeAction(action) = action else {
+            panic!("expected code action");
+        };
+
+        let edit = action.edit.expect("workspace edit to be present");
+        assert!(edit.changes.is_none());
+
+        let Some(DocumentChanges::Edits(edits)) = edit.document_changes else {
+            panic!("expected versioned document edits");
+        };
+
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0].text_document.uri, uri);
+        assert_eq!(edits[0].text_document.version, Some(7));
+        assert_eq!(edits[0].edits.len(), 1);
+
+        let tower_lsp::lsp_types::OneOf::Left(TextEdit { range, new_text }) = &edits[0].edits[0]
+        else {
+            panic!("expected plain text edit");
+        };
+
+        assert_eq!(*range, finding.range);
+        assert_eq!(new_text, &finding.replacement);
     }
 }
