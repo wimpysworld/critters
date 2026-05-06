@@ -1,7 +1,3 @@
-mod config;
-mod rules;
-mod scanner;
-
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -20,9 +16,9 @@ use tower_lsp::lsp_types::{
 };
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
-use crate::config::{ServerConfig, ServerConfigUpdate};
-use crate::rules::effective_rules;
-use crate::scanner::{contains, scan, to_diagnostics, Finding};
+use critters_core::config::{ServerConfig, ServerConfigUpdate};
+use critters_core::rules::effective_rules;
+use critters_core::scanner::{contains, scan, to_diagnostics, Finding};
 
 #[derive(Clone, Debug)]
 struct DocumentState {
@@ -428,8 +424,8 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::{quick_fix_action, ranges_overlap, DocumentState, State};
-    use crate::config::{RuleConfig, ServerConfig, Severity};
-    use crate::scanner::Finding;
+    use critters_core::config::{RuleConfig, ServerConfig, Severity};
+    use critters_core::scanner::Finding;
     use tower_lsp::lsp_types::{
         CodeActionOrCommand, DocumentChanges, Position, Range, TextEdit, Url,
     };

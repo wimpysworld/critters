@@ -14,7 +14,7 @@ That means:
 
 Zed does not offer a verified wildcard entry for attaching an extension language server to every language.
 
-Critters therefore ships with a broad but explicit language list in `extension.toml`.
+Critters therefore ships with a broad but explicit language list in `editors/zed/extension.toml`.
 
 If Zed gains a first-class wildcard matcher later, Critters should switch to it.
 

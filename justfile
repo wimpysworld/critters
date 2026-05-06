@@ -26,7 +26,7 @@ fmt:
 
 # Build the language server release binary
 build-server:
-    @cargo build --release --manifest-path server/Cargo.toml
+    @cargo build --release --package critters-lsp
 
 # Check what tailor would change and measure
 measure:

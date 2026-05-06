@@ -1,5 +1,5 @@
+use lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range as LspRange};
 use std::collections::BTreeMap;
-use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range as LspRange};
 
 use crate::config::Severity;
 use crate::rules::EffectiveRule;
@@ -267,7 +267,7 @@ mod tests {
     use crate::rules::EffectiveRule;
 
     use super::{contains, scan};
-    use tower_lsp::lsp_types::Position;
+    use lsp_types::Position;
 
     #[test]
     fn contiguous_gremlins_are_grouped_into_one_finding() {
