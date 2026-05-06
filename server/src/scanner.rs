@@ -10,6 +10,8 @@ pub struct Finding {
     pub severity: Severity,
     pub message: String,
     pub hover: String,
+    pub fix_title: String,
+    pub replacement: String,
 }
 
 #[derive(Clone, Debug)]
@@ -19,6 +21,7 @@ struct RunItem {
     severity: Severity,
     class_name: String,
     zero_width: bool,
+    replacement: String,
 }
 
 #[derive(Clone, Debug)]
@@ -51,6 +54,7 @@ pub fn scan(
                 severity: rule.severity.clone(),
                 class_name: rule.class_name.clone(),
                 zero_width: rule.zero_width,
+                replacement: replacement_for(ch).to_string(),
             };
 
             match pending.as_mut() {
@@ -168,6 +172,16 @@ fn build_finding(run: PendingRun) -> Finding {
     classes.dedup();
 
     let zero_width = groups.iter().any(|(item, _)| item.zero_width);
+    let replacement = groups
+        .iter()
+        .map(|(item, count)| item.replacement.repeat(*count))
+        .collect::<Vec<_>>()
+        .join("");
+    let fix_title = if replacement.is_empty() {
+        "Remove suspicious Unicode characters".to_string()
+    } else {
+        "Replace suspicious Unicode characters with safe ASCII".to_string()
+    };
     let mut hover_lines = vec![
         "**Critters**".to_string(),
         format!("- Severity: `{}`", severity.as_str()),
@@ -189,6 +203,18 @@ fn build_finding(run: PendingRun) -> Finding {
         severity,
         message,
         hover: hover_lines.join("\n"),
+        fix_title,
+        replacement,
+    }
+}
+
+fn replacement_for(ch: char) -> &'static str {
+    match ch {
+        '\u{00A0}' => " ",
+        '\u{2013}' => "-",
+        '\u{2018}' | '\u{2019}' => "'",
+        '\u{201C}' | '\u{201D}' => "\"",
+        _ => "",
     }
 }
 
@@ -271,6 +297,41 @@ mod tests {
         let findings = scan("a\u{200B}\u{00A0}b", &rules, 50);
         assert_eq!(findings.len(), 1);
         assert!(findings[0].message.contains("Suspicious Unicode run"));
+    }
+
+    #[test]
+    fn findings_carry_safe_quick_fix_replacements() {
+        let rules = BTreeMap::from([
+            (
+                0x00A0,
+                EffectiveRule {
+                    code_point: 0x00A0,
+                    description: "NO-BREAK SPACE".to_string(),
+                    severity: Severity::Info,
+                    class_name: "spacing".to_string(),
+                    zero_width: false,
+                },
+            ),
+            (
+                0x200B,
+                EffectiveRule {
+                    code_point: 0x200B,
+                    description: "ZERO WIDTH SPACE".to_string(),
+                    severity: Severity::Error,
+                    class_name: "zero-width".to_string(),
+                    zero_width: true,
+                },
+            ),
+        ]);
+
+        let findings = scan("a\u{00A0}\u{200B}b", &rules, 50);
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].replacement, " ");
+        assert_eq!(
+            findings[0].fix_title,
+            "Replace suspicious Unicode characters with safe ASCII"
+        );
     }
 
     #[test]

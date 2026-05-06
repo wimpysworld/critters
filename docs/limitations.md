@@ -25,8 +25,12 @@ That fallback was removed because it could not pin or verify release artifacts b
 
 Use a local `binary.path` override or put `critters-lsp` on your `PATH`.
 
-## No code actions yet
+## Code actions are conservative
 
-Critters reports suspicious characters and explains them.
+Critters offers quick fixes for cases it can change safely:
 
-It does not yet offer removals, replacements, or quick fixes.
+- invisible controls are removed
+- no-break spaces become regular spaces
+- curly quotes and en dashes become ASCII equivalents
+
+Custom replacements, previews, and context-sensitive rewrites are out of scope for now.

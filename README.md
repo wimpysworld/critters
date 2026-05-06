@@ -2,7 +2,7 @@
 
 Critters brings the core safety behaviour of `vscode-gremlins` to Zed.
 
-It scans open files for invisible, misleading, and high-risk Unicode characters, then reports them through Zed diagnostics and hover.
+It scans open files for invisible, misleading, and high-risk Unicode characters, then reports them through Zed diagnostics, hover, and quick fixes.
 
 ## What v0.1 ships
 
@@ -12,12 +12,13 @@ It scans open files for invisible, misleading, and high-risk Unicode characters,
 - language-specific overrides keyed by LSP `languageId`
 - one diagnostic per contiguous suspicious run
 - hover details with code points, classes, and severity
-- Zed extension wrapper that can launch a managed `critters-lsp` binary or use a locally installed one
+- Zed extension wrapper that launches a configured or locally installed `critters-lsp` binary
+- quick fixes that remove invisible controls or replace safe cases such as no-break spaces and curly quotes with ASCII
 
 ## What it does not promise yet
 
 - arbitrary inline decorations
-- gutter markers
+- custom gutter icons
 - overview ruler styling
 - semantic token styling
 
@@ -81,24 +82,6 @@ Example local binary override:
   }
 }
 ```
-
-## Managed binaries
-
-The extension looks for `critters-lsp` in this order:
-
-1. `lsp.critters-lsp.binary.path`
-2. `critters-lsp` on the worktree `PATH`
-3. common local development build paths
-
-Critters no longer auto-downloads and executes the latest GitHub release asset.
-That convenience fallback created an avoidable supply-chain risk because the
-extension could not pin or verify the downloaded binary out of band. If you need
-managed installation, download and verify the release artifact yourself, then
-point `lsp.critters-lsp.binary.path` at the pinned local binary.
-
-- `critters-lsp-v0.1.0-x86_64-unknown-linux-gnu.tar.gz`
-- `critters-lsp-v0.1.0-aarch64-apple-darwin.tar.gz`
-- `critters-lsp-v0.1.0-x86_64-pc-windows-msvc.zip`
 
 ## Documentation
 

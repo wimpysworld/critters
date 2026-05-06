@@ -9,11 +9,13 @@ use anyhow::Result;
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc;
 use tower_lsp::lsp_types::{
-    DidChangeConfigurationParams, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
-    DidOpenTextDocumentParams, Hover, HoverContents, HoverParams, InitializeParams,
-    InitializeResult, InitializedParams, MarkupContent, MarkupKind, MessageType, OneOf,
-    ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind, Url,
-    WorkspaceFoldersServerCapabilities, WorkspaceServerCapabilities,
+    CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionParams,
+    CodeActionProviderCapability, CodeActionResponse, DidChangeConfigurationParams,
+    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams, Hover,
+    HoverContents, HoverParams, InitializeParams, InitializeResult, InitializedParams,
+    MarkupContent, MarkupKind, MessageType, OneOf, ServerCapabilities, TextDocumentSyncCapability,
+    TextDocumentSyncKind, TextEdit, Url, WorkspaceEdit, WorkspaceFoldersServerCapabilities,
+    WorkspaceServerCapabilities,
 };
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
@@ -134,6 +136,7 @@ impl LanguageServer for Backend {
 
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
+                code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
                 hover_provider: Some(hover_provider()),
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
                     TextDocumentSyncKind::FULL,
@@ -261,6 +264,47 @@ impl LanguageServer for Backend {
             range: Some(finding.range),
         }))
     }
+
+    async fn code_action(
+        &self,
+        params: CodeActionParams,
+    ) -> jsonrpc::Result<Option<CodeActionResponse>> {
+        let uri = params.text_document.uri;
+        let documents = self.state.documents.read().await;
+        let Some(document) = documents.get(&uri) else {
+            return Ok(None);
+        };
+
+        let actions = document
+            .findings
+            .iter()
+            .filter(|finding| ranges_overlap(finding.range, params.range))
+            .map(|finding| {
+                CodeActionOrCommand::CodeAction(CodeAction {
+                    title: finding.fix_title.clone(),
+                    kind: Some(CodeActionKind::QUICKFIX),
+                    edit: Some(WorkspaceEdit {
+                        changes: Some(HashMap::from([(
+                            uri.clone(),
+                            vec![TextEdit {
+                                range: finding.range,
+                                new_text: finding.replacement.clone(),
+                            }],
+                        )])),
+                        ..WorkspaceEdit::default()
+                    }),
+                    is_preferred: Some(true),
+                    ..CodeAction::default()
+                })
+            })
+            .collect::<Vec<_>>();
+
+        if actions.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(actions))
+        }
+    }
 }
 
 impl Backend {
@@ -330,6 +374,26 @@ fn hover_provider() -> tower_lsp::lsp_types::HoverProviderCapability {
     tower_lsp::lsp_types::HoverProviderCapability::Simple(true)
 }
 
+fn ranges_overlap(left: tower_lsp::lsp_types::Range, right: tower_lsp::lsp_types::Range) -> bool {
+    compare_position(left.start, right.end) <= 0 && compare_position(right.start, left.end) <= 0
+}
+
+fn compare_position(
+    left: tower_lsp::lsp_types::Position,
+    right: tower_lsp::lsp_types::Position,
+) -> i8 {
+    match (
+        left.line.cmp(&right.line),
+        left.character.cmp(&right.character),
+    ) {
+        (std::cmp::Ordering::Less, _) => -1,
+        (std::cmp::Ordering::Greater, _) => 1,
+        (_, std::cmp::Ordering::Less) => -1,
+        (_, std::cmp::Ordering::Greater) => 1,
+        _ => 0,
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let stdin = tokio::io::stdin();
@@ -362,6 +426,8 @@ mod tests {
             severity: Severity::Warning,
             message: message.to_string(),
             hover: message.to_string(),
+            fix_title: "Remove suspicious Unicode characters".to_string(),
+            replacement: String::new(),
         }
     }
 
