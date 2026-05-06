@@ -13,8 +13,8 @@ use tower_lsp::lsp_types::{
     CodeActionProviderCapability, CodeActionResponse, DidChangeConfigurationParams,
     DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
     DocumentChanges, Hover, HoverContents, HoverParams, InitializeParams, InitializeResult,
-    InitializedParams, MarkupContent, MarkupKind, MessageType,
-    OptionalVersionedTextDocumentIdentifier, OneOf, ServerCapabilities, TextDocumentEdit,
+    InitializedParams, MarkupContent, MarkupKind, MessageType, OneOf,
+    OptionalVersionedTextDocumentIdentifier, ServerCapabilities, TextDocumentEdit,
     TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, Url, WorkspaceEdit,
     WorkspaceFoldersServerCapabilities, WorkspaceServerCapabilities,
 };
@@ -368,7 +368,7 @@ fn hover_provider() -> tower_lsp::lsp_types::HoverProviderCapability {
 }
 
 fn ranges_overlap(left: tower_lsp::lsp_types::Range, right: tower_lsp::lsp_types::Range) -> bool {
-    compare_position(left.start, right.end) <= 0 && compare_position(right.start, left.end) <= 0
+    compare_position(left.start, right.end) < 0 && compare_position(right.start, left.end) < 0
 }
 
 fn compare_position(
@@ -427,7 +427,7 @@ async fn main() -> Result<()> {
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::{quick_fix_action, DocumentState, State};
+    use super::{quick_fix_action, ranges_overlap, DocumentState, State};
     use crate::config::{RuleConfig, ServerConfig, Severity};
     use crate::scanner::Finding;
     use tower_lsp::lsp_types::{
@@ -446,6 +446,25 @@ mod tests {
             fix_title: "Remove suspicious Unicode characters".to_string(),
             replacement: String::new(),
         }
+    }
+
+    fn sample_range(start_character: u32, end_character: u32) -> Range {
+        Range {
+            start: Position::new(0, start_character),
+            end: Position::new(0, end_character),
+        }
+    }
+
+    #[test]
+    fn adjacent_ranges_do_not_overlap_for_quick_fixes() {
+        assert!(!ranges_overlap(sample_range(0, 1), sample_range(1, 2)));
+        assert!(!ranges_overlap(sample_range(1, 2), sample_range(0, 1)));
+    }
+
+    #[test]
+    fn intersecting_ranges_overlap_for_quick_fixes() {
+        assert!(ranges_overlap(sample_range(0, 2), sample_range(1, 3)));
+        assert!(ranges_overlap(sample_range(1, 3), sample_range(0, 2)));
     }
 
     #[tokio::test]
