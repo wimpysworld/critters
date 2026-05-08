@@ -14,5 +14,6 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 critters-core = { path = "../critters-core" }
+lsp-types.workspace = true
 tokio.workspace = true
 tower-lsp.workspace = true

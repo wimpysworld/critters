@@ -2,23 +2,24 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
+use lsp_types as core_lsp_types;
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc;
 use tower_lsp::lsp_types::{
     CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionParams,
-    CodeActionProviderCapability, CodeActionResponse, DidChangeConfigurationParams,
-    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-    DocumentChanges, Hover, HoverContents, HoverParams, InitializeParams, InitializeResult,
-    InitializedParams, MarkupContent, MarkupKind, MessageType, OneOf,
-    OptionalVersionedTextDocumentIdentifier, ServerCapabilities, TextDocumentEdit,
-    TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, Url, WorkspaceEdit,
-    WorkspaceFoldersServerCapabilities, WorkspaceServerCapabilities,
+    CodeActionProviderCapability, CodeActionResponse, Diagnostic, DiagnosticSeverity,
+    DidChangeConfigurationParams, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
+    DidOpenTextDocumentParams, DocumentChanges, Hover, HoverContents, HoverParams,
+    InitializeParams, InitializeResult, InitializedParams, MarkupContent, MarkupKind, MessageType,
+    OneOf, OptionalVersionedTextDocumentIdentifier, Position, Range, ServerCapabilities,
+    TextDocumentEdit, TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, Url,
+    WorkspaceEdit, WorkspaceFoldersServerCapabilities, WorkspaceServerCapabilities,
 };
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
 use critters_core::config::{ServerConfig, ServerConfigUpdate};
 use critters_core::rules::effective_rules;
-use critters_core::scanner::{contains, scan, to_diagnostics, Finding};
+use critters_core::scanner::{scan, to_diagnostics, Finding};
 
 #[derive(Clone, Debug)]
 struct DocumentState {
@@ -260,14 +261,14 @@ impl LanguageServer for Backend {
         let finding = document
             .findings
             .iter()
-            .find(|finding| contains(&finding.range, position));
+            .find(|finding| contains_tower_position(finding.range, position));
 
         Ok(finding.map(|finding| Hover {
             contents: HoverContents::Markup(MarkupContent {
                 kind: MarkupKind::Markdown,
                 value: finding.hover.clone(),
             }),
-            range: Some(finding.range),
+            range: Some(to_tower_range(finding.range)),
         }))
     }
 
@@ -284,7 +285,7 @@ impl LanguageServer for Backend {
         let actions = document
             .findings
             .iter()
-            .filter(|finding| ranges_overlap(finding.range, params.range))
+            .filter(|finding| ranges_overlap(to_tower_range(finding.range), params.range))
             .map(|finding| quick_fix_action(&uri, document.version, finding))
             .collect::<Vec<_>>();
 
@@ -346,7 +347,10 @@ impl Backend {
             }
         };
 
-        let diagnostics = to_diagnostics(&findings);
+        let diagnostics = to_diagnostics(&findings)
+            .into_iter()
+            .map(to_tower_diagnostic)
+            .collect();
         if self
             .state
             .store_findings_if_current(uri, &snapshot, findings)
@@ -363,14 +367,49 @@ fn hover_provider() -> tower_lsp::lsp_types::HoverProviderCapability {
     tower_lsp::lsp_types::HoverProviderCapability::Simple(true)
 }
 
-fn ranges_overlap(left: tower_lsp::lsp_types::Range, right: tower_lsp::lsp_types::Range) -> bool {
+fn contains_tower_position(range: core_lsp_types::Range, position: Position) -> bool {
+    compare_position(to_tower_position(range.start), position) <= 0
+        && compare_position(position, to_tower_position(range.end)) < 0
+}
+
+fn to_tower_diagnostic(diagnostic: core_lsp_types::Diagnostic) -> Diagnostic {
+    Diagnostic {
+        range: to_tower_range(diagnostic.range),
+        severity: diagnostic.severity.map(to_tower_diagnostic_severity),
+        source: diagnostic.source,
+        message: diagnostic.message,
+        ..Diagnostic::default()
+    }
+}
+
+fn to_tower_diagnostic_severity(
+    severity: core_lsp_types::DiagnosticSeverity,
+) -> DiagnosticSeverity {
+    match severity {
+        core_lsp_types::DiagnosticSeverity::ERROR => DiagnosticSeverity::ERROR,
+        core_lsp_types::DiagnosticSeverity::WARNING => DiagnosticSeverity::WARNING,
+        core_lsp_types::DiagnosticSeverity::INFORMATION => DiagnosticSeverity::INFORMATION,
+        core_lsp_types::DiagnosticSeverity::HINT => DiagnosticSeverity::HINT,
+        _ => DiagnosticSeverity::WARNING,
+    }
+}
+
+fn to_tower_range(range: core_lsp_types::Range) -> Range {
+    Range {
+        start: to_tower_position(range.start),
+        end: to_tower_position(range.end),
+    }
+}
+
+fn to_tower_position(position: core_lsp_types::Position) -> Position {
+    Position::new(position.line, position.character)
+}
+
+fn ranges_overlap(left: Range, right: Range) -> bool {
     compare_position(left.start, right.end) < 0 && compare_position(right.start, left.end) < 0
 }
 
-fn compare_position(
-    left: tower_lsp::lsp_types::Position,
-    right: tower_lsp::lsp_types::Position,
-) -> i8 {
+fn compare_position(left: Position, right: Position) -> i8 {
     match (
         left.line.cmp(&right.line),
         left.character.cmp(&right.character),
@@ -394,7 +433,7 @@ fn quick_fix_action(uri: &Url, version: i32, finding: &Finding) -> CodeActionOrC
                     version: Some(version),
                 },
                 edits: vec![OneOf::Left(TextEdit {
-                    range: finding.range,
+                    range: to_tower_range(finding.range),
                     new_text: finding.replacement.clone(),
                 })],
             }])),
@@ -423,18 +462,19 @@ async fn main() -> Result<()> {
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::{quick_fix_action, ranges_overlap, DocumentState, State};
+    use super::{quick_fix_action, ranges_overlap, to_tower_range, DocumentState, State};
     use critters_core::config::{RuleConfig, ServerConfig, Severity};
     use critters_core::scanner::Finding;
+    use lsp_types as core_lsp_types;
     use tower_lsp::lsp_types::{
         CodeActionOrCommand, DocumentChanges, Position, Range, TextEdit, Url,
     };
 
     fn sample_finding(message: &str) -> Finding {
         Finding {
-            range: Range {
-                start: Position::new(0, 0),
-                end: Position::new(0, 1),
+            range: core_lsp_types::Range {
+                start: core_lsp_types::Position::new(0, 0),
+                end: core_lsp_types::Position::new(0, 1),
             },
             severity: Severity::Warning,
             message: message.to_string(),
@@ -622,7 +662,7 @@ mod tests {
             panic!("expected plain text edit");
         };
 
-        assert_eq!(*range, finding.range);
+        assert_eq!(*range, to_tower_range(finding.range));
         assert_eq!(new_text, &finding.replacement);
     }
 }
