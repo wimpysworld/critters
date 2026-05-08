@@ -97,6 +97,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "critters-core",
+ "lsp-types 0.97.0",
  "tokio",
  "tower-lsp",
 ]
