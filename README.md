@@ -65,15 +65,20 @@ Add settings under `lsp.critters-lsp.settings` in `~/.config/zed/settings.json`.
 
 ## Local development
 
-1. Enter the dev shell.
+1. Enter the optional dev shell, or use your host Rust toolchain.
 2. Build the server.
-3. Install `editors/zed` as the dev extension in Zed.
-4. Point Zed at the locally built binary, or put `critters-lsp` on your `PATH`.
+3. Build the Zed extension WebAssembly module.
+4. Install `editors/zed` as the dev extension in Zed.
+5. Point Zed at the locally built binary, or put `critters-lsp` on your `PATH`.
 
 ```bash
 nix develop
 cargo build --package critters-lsp
+rustup target add wasm32-wasip2
+cargo build --package critters-zed --target wasm32-wasip2
 ```
+
+The release CI builds `critters-lsp` archives for Windows, macOS, and Linux from bare semver tags such as `0.1.0`. Critters is not published to the upstream Zed extension marketplace yet.
 
 Example local binary override:
 
