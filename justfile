@@ -14,7 +14,6 @@ lint:
 
 # Run tests
 test:
-    @cargo test --package critters-lsp --test protocol
     @cargo test --workspace
 
 # Check the full workspace
