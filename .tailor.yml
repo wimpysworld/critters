@@ -2,6 +2,15 @@
 license: BlueOak-1.0.0
 
 repository:
+  description: Reveal odd and invisible whitespace characters.
+  homepage: https://github.com/wimpysworld/critters
+  topics:
+    - zed
+    - zed-extension
+    - lsp
+    - lsp-server
+    - whitespace
+    - no-break
   has_wiki: false
   has_discussions: false
   has_projects: false
